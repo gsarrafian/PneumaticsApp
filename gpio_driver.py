@@ -1,4 +1,3 @@
-
 try:
     import RPi.GPIO as GPIO
     _ON_PI = True
