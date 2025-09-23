@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, Tuple
 
-DB_PATH = "/home/qa/pneumatic_control.db"
+DB_PATH = "/home/qa/PneumaticsApp/pneumatic_control.db"
 
 
 def get_db_connection() -> sqlite3.Connection:
