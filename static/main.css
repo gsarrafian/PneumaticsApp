@@ -1,10 +1,11 @@
 :root {
   --background: #f5f7fb;
   --panel-bg: #ffffff;
-  --border-color: #d8ddea;
+  --border-color: #d8deea;
   --primary: #1976d2;
   --primary-dark: #1258a2;
-  --accent: #e53935;
+  --pause-accent: #f7b733;
+  --reset-accent: #e53935;
   --text: #1b2533;
   --muted: #55647a;
   --radius: 12px;
@@ -120,7 +121,7 @@ button:focus-visible {
 }
 
 .pause-btn {
-  background: #f7b733;
+  background: var(--pause-accent);
   color: #fff;
   box-shadow: 0 6px 20px rgba(247, 183, 51, 0.25);
 }
@@ -131,7 +132,7 @@ button:focus-visible {
 }
 
 .reset-btn {
-  background: var(--accent);
+  background: var(--reset-accent);
   color: #fff;
   box-shadow: 0 6px 20px rgba(229, 57, 53, 0.25);
 }
