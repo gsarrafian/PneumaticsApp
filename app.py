@@ -2,6 +2,12 @@
 from flask import Flask, render_template, request, jsonify
 from gpio_driver import GPIOController
 import threading, time, os
+from werkzeug.serving import WSGIRequestHandler
+
+class SilentHandler(WSGIRequestHandler):
+    def log(self, type, message, *args):
+        pass
+
 
 app = Flask(__name__)
 
@@ -163,4 +169,4 @@ def piston_status():
     return jsonify({"ok": True, "status": workers[piston].status()})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, request_handler=SilentHandler)
