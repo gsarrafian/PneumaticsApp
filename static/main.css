@@ -142,6 +142,11 @@ button:focus-visible {
   box-shadow: 0 10px 24px rgba(229, 57, 53, 0.32);
 }
 
+.refresh-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgb(243, 243, 243);
+}
+
 @media (max-width: 720px) {
   body {
     padding: 24px;

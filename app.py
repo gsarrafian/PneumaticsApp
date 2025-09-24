@@ -1,8 +1,12 @@
 # app.py
 from flask import Flask, render_template, request, jsonify
 from gpio_driver import GPIOController
-from i2c_driver import pressure_to_voltage, voltage_to_code
-import threading, time, os
+from i2c_driver import (
+    gp8403_set_range_0_10v,
+    pressure_to_voltage,
+    set_pressure,
+)
+import threading, time
 from werkzeug.serving import WSGIRequestHandler
 from db import load_state, save_state
 
@@ -17,6 +21,39 @@ PINMAP = {
     "piston1_valve": 16,  # adjust to your wiring
     "piston2_valve": 18,
 }
+
+PISTON_TO_DAC_CHANNEL = {
+    "piston1": 1,
+    "piston2": 2,
+}
+
+
+def _pressure_to_voltage_safe(desired_pressure):
+    if desired_pressure is None:
+        return None
+    return float(pressure_to_voltage(float(desired_pressure)))
+
+
+def _apply_desired_pressure(piston: str, desired_pressure: float) -> float:
+    channel = PISTON_TO_DAC_CHANNEL.get(piston)
+    if channel is None:
+        raise KeyError(f"No DAC channel configured for {piston}")
+    value = float(desired_pressure)
+    set_pressure(channel, value)
+    return _pressure_to_voltage_safe(value)
+
+
+def _annotate_with_voltage(state: dict) -> dict:
+    for piston in PISTON_TO_DAC_CHANNEL:
+        piston_state = state.get(piston)
+        if not isinstance(piston_state, dict):
+            continue
+        pressure = piston_state.get("desired_pressure")
+        try:
+            piston_state["desired_voltage"] = _pressure_to_voltage_safe(pressure)
+        except Exception:
+            piston_state["desired_voltage"] = None
+    return state
 
 class PistonWorker:
     def __init__(self, name: str, valve_pin: int):
@@ -133,25 +170,33 @@ workers = {
 
 state = load_state()
 workers["piston1"].current_cycle = int(state["piston1"]["current_cycle"])
-workers["piston1"].total_cycles  = int(state["piston1"]["max_cycles"])
+workers["piston1"].total_cycles = int(state["piston1"]["max_cycles"])
 workers["piston2"].current_cycle = int(state["piston2"]["current_cycle"])
-workers["piston2"].total_cycles  = int(state["piston2"]["max_cycles"])
+workers["piston2"].total_cycles = int(state["piston2"]["max_cycles"])
 
-print(pressure_to_voltage(0))      # expect ~0.0 V
-print(pressure_to_voltage(50))     # expect ~5.0 V
-print(pressure_to_voltage(100))    # expect ~10.0 V
+try:
+    gp8403_set_range_0_10v()
+    for piston_name, piston_state in state.items():
+        if piston_name in PISTON_TO_DAC_CHANNEL:
+            try:
+                voltage = _apply_desired_pressure(
+                    piston_name, piston_state.get("desired_pressure", 0.0)
+                )
+            except Exception:
+                voltage = None
+            piston_state["desired_voltage"] = voltage
+except Exception as exc:  # pragma: no cover - hardware access
+    print(f"Warning: Failed to initialize DAC: {exc}")
 
-print(voltage_to_code(0.0))        # expect 0
-print(voltage_to_code(10.0))       # expect 4095
-print(voltage_to_code(5.0))        # expect ~2048
-
+state = _annotate_with_voltage(state)
 @app.route("/")
 def index():
     return render_template("index.html", title="Pneumatics Control")
 
 @app.route("/api/state", methods=["GET"])
 def api_state():
-    return jsonify({"ok": True, "state": load_state()})
+    state = _annotate_with_voltage(load_state())
+    return jsonify({"ok": True, "state": state})
 
 @app.route("/api/piston/update", methods=["POST"])
 def piston_update():
@@ -189,15 +234,29 @@ def piston_update():
         state[key]["max_cycles"] = cyc
         # keep current_cycle as-is; worker will stop when hitting new target
     if desired_pressure is not None:
-        state[key]["desired_pressure"] = float(desired_pressure)
+        try:
+            desired_pressure_value = float(desired_pressure)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Desired pressure must be a number"}), 400
+        if not 0.0 <= desired_pressure_value <= 100.0:
+            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 100 psi"}), 400
+        try:
+            voltage = _apply_desired_pressure(piston, desired_pressure_value)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Failed to set pressure: {exc}"}), 500
+        state[key]["desired_pressure"] = desired_pressure_value
+        state[key]["desired_voltage"] = voltage
     # also mirror runtime flags
     st = workers[piston].status()
     state[key]["running"] = bool(st["running"])
     state[key]["paused"]  = bool(st["paused"])
     state[key]["current_cycle"] = int(st["current_cycle"])
+    state = _annotate_with_voltage(state)
     save_state(state)
 
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    status_with_voltage = workers[piston].status()
+    status_with_voltage["desired_voltage"] = state[key].get("desired_voltage")
+    return jsonify({"ok": True, "status": status_with_voltage})
 
 @app.route("/api/piston/start", methods=["POST"])
 def piston_start():
@@ -222,11 +281,24 @@ def piston_start():
     st[key]["running"] = True
     st[key]["paused"] = False
     if desired_pressure is not None:
-        state[key]["desired_pressure"] = float(desired_pressure)  # ← NEW
-    save_state(state)
+        try:
+            desired_pressure_value = float(desired_pressure)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Desired pressure must be a number"}), 400
+        if not 0.0 <= desired_pressure_value <= 100.0:
+            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 100 psi"}), 400
+        try:
+            voltage = _apply_desired_pressure(piston, desired_pressure_value)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Failed to set pressure: {exc}"}), 500
+        st[key]["desired_pressure"] = desired_pressure_value
+        st[key]["desired_voltage"] = voltage
+    st = _annotate_with_voltage(st)
     save_state(st)
 
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    status_with_voltage = workers[piston].status()
+    status_with_voltage["desired_voltage"] = st[key].get("desired_voltage")
+    return jsonify({"ok": True, "status": status_with_voltage})
 
 @app.route("/api/piston/pause", methods=["POST"])
 def piston_pause():
@@ -240,9 +312,12 @@ def piston_pause():
     st[piston]["paused"] = True
     st[piston]["running"] = True
     st[piston]["current_cycle"] = workers[piston].current_cycle
+    st = _annotate_with_voltage(st)
     save_state(st)
 
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    status_with_voltage = workers[piston].status()
+    status_with_voltage["desired_voltage"] = st[piston].get("desired_voltage")
+    return jsonify({"ok": True, "status": status_with_voltage})
 
 @app.route("/api/piston/resume", methods=["POST"])
 def piston_resume():
@@ -256,9 +331,12 @@ def piston_resume():
     st[piston]["paused"] = False
     st[piston]["running"] = True
     st[piston]["current_cycle"] = workers[piston].current_cycle
+    st = _annotate_with_voltage(st)
     save_state(st)
 
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    status_with_voltage = workers[piston].status()
+    status_with_voltage["desired_voltage"] = st[piston].get("desired_voltage")
+    return jsonify({"ok": True, "status": status_with_voltage})
 
 @app.route("/api/piston/reset", methods=["POST"])
 def piston_reset():
@@ -272,16 +350,23 @@ def piston_reset():
     st[piston]["current_cycle"] = 0
     st[piston]["running"] = False
     st[piston]["paused"] = False
+    st = _annotate_with_voltage(st)
     save_state(st)
 
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    status_with_voltage = workers[piston].status()
+    status_with_voltage["desired_voltage"] = st[piston].get("desired_voltage")
+    return jsonify({"ok": True, "status": status_with_voltage})
 
 @app.route("/api/piston/status", methods=["GET"])
 def piston_status():
     piston = request.args.get("piston", "piston1")
     if piston not in workers:
         return jsonify({"ok": False, "error": "Unknown piston"}), 400
-    return jsonify({"ok": True, "status": workers[piston].status()})
+    st = workers[piston].status()
+    state = load_state()
+    state = _annotate_with_voltage(state)
+    st["desired_voltage"] = state.get(piston, {}).get("desired_voltage")
+    return jsonify({"ok": True, "status": st})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, request_handler=SilentHandler)

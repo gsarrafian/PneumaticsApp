@@ -19,13 +19,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (resp.ok) {
       const s = resp.state;
       ["piston1", "piston2"].forEach(p => {
-        document.getElementById(`${p}-desired-pressure`).value = s[p].desired_pressure ?? 0;
-        document.getElementById(`${p}-max-cycles`).value = s[p].max_cycles ?? 0;
-        document.getElementById(`${p}-time-on`).value = s[p].time_on ?? 0;
-        document.getElementById(`${p}-time-off`).value = s[p].time_off ?? 0;
+        const state = s[p] ?? {};
+        document.getElementById(`${p}-desired-pressure`).value = state.desired_pressure ?? 0;
+        document.getElementById(`${p}-max-cycles`).value = state.max_cycles ?? 0;
+        document.getElementById(`${p}-time-on`).value = state.time_on ?? 0;
+        document.getElementById(`${p}-time-off`).value = state.time_off ?? 0;
+        const voltageEl = document.getElementById(`${p}-voltage`);
+        if (voltageEl) voltageEl.textContent = formatVoltage(state.desired_voltage);
       });
     }
   } catch {
+  }
+
+    function formatVoltage(voltage) {
+    if (typeof voltage !== "number" || Number.isNaN(voltage)) return "Voltage: N/A";
+    return `Voltage: ${voltage.toFixed(2)} V`;
   }
 
   function getPanelValues(panelPrefix) {
@@ -41,10 +49,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     return document.getElementById(`${pistonName}-status`);
   }
 
+  function voltageElFor(pistonName) {
+    return document.getElementById(`${pistonName}-voltage`);
+  }
+
   async function fetchStatus(pistonName) {
     const resp = await getJSON(`/api/piston/status?piston=${encodeURIComponent(pistonName)}`);
     if (!resp.ok) throw new Error(resp.error || "Status failed");
-    return resp.status; // { running, paused, current_cycle, total_cycles }
+    return resp.status; // { running, paused, current_cycle, total_cycles, desired_voltage }
   }
 
   async function startOrResume(pistonName) {
@@ -71,11 +83,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     const resetBtn = panel.querySelector(".reset-btn");
     const refreshBtn = panel.querySelector(".refresh-btn");
     const statusEl = statusElFor(pistonName);
+    const voltageEl = voltageElFor(pistonName);
 
     startBtn.addEventListener("click", async () => {
       try {
         const resp = await startOrResume(pistonName);
-        if (!resp.ok) alert(resp.error || "Start/Resume failed");
+        if (!resp.ok) {
+          alert(resp.error || "Start/Resume failed");
+        } else if (voltageEl) {
+          voltageEl.textContent = formatVoltage(resp.status?.desired_voltage);
+        }
       } catch (e) {
         alert(e.message);
       }
@@ -83,7 +100,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     pauseBtn.addEventListener("click", async () => {
       const resp = await postJSON("/api/piston/pause", {piston: pistonName});
-      if (!resp.ok) alert(resp.error || "Pause failed");
+      if (!resp.ok) {
+        alert(resp.error || "Pause failed");
+      } else if (voltageEl) {
+        voltageEl.textContent = formatVoltage(resp.status?.desired_voltage);
+      }
     });
 
     resetBtn.addEventListener("click", async () => {
@@ -100,12 +121,14 @@ document.addEventListener("DOMContentLoaded", async () => {
           time_off: vals.time_off,
           cycles: vals.cycles,
           desired_pressure: vals.desired_pressure,
-        // desired_pressure: desired
+        });
+        if (!resp.ok) {
+          alert(resp.error || "Update failed");
+        } else if (voltageEl) {
+          voltageEl.textContent = formatVoltage(resp.status?.desired_voltage);
+        }
       });
-      if (!resp.ok) alert(resp.error || "Update failed");
-    });
-  }
-
+      }
     // status poller
     setInterval(async () => {
       try {
@@ -114,11 +137,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         const progress =
             s.total_cycles > 0 ? ` (${s.current_cycle}/${s.total_cycles})` : "";
         statusEl.textContent = `${state}${progress}`;
+        if (voltageEl) voltageEl.textContent = formatVoltage(s.desired_voltage);
       } catch (e) {
         statusEl.textContent = "Status unavailable";
+        if (voltageEl) voltageEl.textContent = "Voltage: N/A";
       }
     }, 500);
   }
+
+  ["piston1", "piston2"].forEach(p => {
+    const el = voltageElFor(p);
+    if (el && !el.textContent) el.textContent = "Voltage: N/A";
+  });
 
   wirePanel("piston-1-title", "piston1");
   wirePanel("piston-2-title", "piston2");
