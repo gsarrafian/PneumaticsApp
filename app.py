@@ -1,7 +1,7 @@
 # app.py
 from flask import Flask, render_template, request, jsonify
 from gpio_driver import GPIOController
-from i2c_driver import set_pressure
+from i2c_driver import pressure_to_voltage, voltage_to_code
 import threading, time, os
 from werkzeug.serving import WSGIRequestHandler
 from db import load_state, save_state
@@ -136,6 +136,14 @@ workers["piston1"].current_cycle = int(state["piston1"]["current_cycle"])
 workers["piston1"].total_cycles  = int(state["piston1"]["max_cycles"])
 workers["piston2"].current_cycle = int(state["piston2"]["current_cycle"])
 workers["piston2"].total_cycles  = int(state["piston2"]["max_cycles"])
+
+print(pressure_to_voltage(0))      # expect ~0.0 V
+print(pressure_to_voltage(50))     # expect ~5.0 V
+print(pressure_to_voltage(100))    # expect ~10.0 V
+
+print(voltage_to_code(0.0))        # expect 0
+print(voltage_to_code(10.0))       # expect 4095
+print(voltage_to_code(5.0))        # expect ~2048
 
 @app.route("/")
 def index():

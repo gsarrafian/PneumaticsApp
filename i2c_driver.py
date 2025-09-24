@@ -42,7 +42,6 @@ class _MockSMBus:
         self.closed = True
         LOGGER.debug("Mock SMBus on bus %s closed", self.bus)
 
-
 _bus: Optional[object] = None
 
 
@@ -63,35 +62,30 @@ def _get_bus() -> object:
 
     return _bus
 
+def gp8403_set_range_0_10v(address: int = GP8403_DEFAULT_ADDRESS) -> None:
+    """Put the GP8403 into 0–10 V output range."""
+    try:
+        _get_bus().write_i2c_block_data(address, 0x01, [0x11])
+    except Exception as e:
+        LOGGER.error("Failed to set 0–10 V range: %s", e)
+        raise
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
 def pressure_to_voltage(pressure_psi: float) -> float:
-    """Translate a desired pressure in PSI to an output voltage.
-
-    The GP8403 is typically paired with electro-pneumatic regulators that expect a
-    0-10 V control signal representing 0-100 PSI. The mapping is linear.
-    """
-
-    clamped_pressure = _clamp(pressure_psi, GP8403_MIN_PRESSURE, GP8403_MAX_PRESSURE)
-    voltage_span = GP8403_MAX_VOLTAGE - GP8403_MIN_VOLTAGE
-    pressure_span = GP8403_MAX_PRESSURE - GP8403_MIN_PRESSURE
-
-    if pressure_span == 0:
-        return GP8403_MIN_VOLTAGE
-
-    proportion = (clamped_pressure - GP8403_MIN_PRESSURE) / pressure_span
-    return GP8403_MIN_VOLTAGE + proportion * voltage_span
-
+    """Map 0–100 psi → 0–10 V (values outside are clamped)."""
+    p = _clamp(pressure_psi, GP8403_MIN_PRESSURE, GP8403_MAX_PRESSURE)
+    proportion = (p - GP8403_MIN_PRESSURE) / (GP8403_MAX_PRESSURE - GP8403_MIN_PRESSURE)
+    return GP8403_MIN_VOLTAGE + proportion * (GP8403_MAX_VOLTAGE - GP8403_MIN_VOLTAGE)
 
 def voltage_to_code(voltage: float) -> int:
-    """Convert a voltage to the 12-bit GP8403 DAC code."""
-
-    clamped_voltage = _clamp(voltage, GP8403_MIN_VOLTAGE, GP8403_MAX_VOLTAGE)
+    """Convert 0–10 V → 12-bit code (0x000–0xFFF)."""
+    v = _clamp(voltage, GP8403_MIN_VOLTAGE, GP8403_MAX_VOLTAGE)
     scale = GP8403_MAX_CODE / (GP8403_MAX_VOLTAGE - GP8403_MIN_VOLTAGE)
-    return int(round((clamped_voltage - GP8403_MIN_VOLTAGE) * scale))
+    code = int(round((v - GP8403_MIN_VOLTAGE) * scale))
+    return _clamp(code, 0, GP8403_MAX_CODE)  # type: ignore[arg-type]
 
 
 def _validate_channel(channel: int) -> int:
@@ -100,45 +94,38 @@ def _validate_channel(channel: int) -> int:
     return channel
 
 
-def _write_channel_register(channel: int, code: int) -> None:
+def _write_channel_register(channel: int, code: int, address: int = GP8403_DEFAULT_ADDRESS) -> None:
+    """Byte packing that matches your proven-working board order."""
     register = GP8403_CHANNEL_REGISTERS[channel]
-    high_byte = (code >> 8) & 0xFF
-    low_byte = code & 0xFF
-    bus = _get_bus()
-    bus.write_i2c_block_data(GP8403_DEFAULT_ADDRESS, register, [high_byte, low_byte])
+    low_byte  = (code >> 4) & 0xFF          # bits 11..4
+    high_byte = (code << 4) & 0xF0          # bits 3..0 -> bits 7..4
+    try:
+        _get_bus().write_i2c_block_data(address, register, [high_byte, low_byte])
+    except Exception as e:
+        LOGGER.error("I2C write failed (addr=0x%02X reg=0x%02X): %s", address, register, e)
+        raise
 
-
-def set_voltage(channel: int, voltage: float) -> None:
-    """Set the output voltage for a DAC channel."""
-
+def set_voltage(channel: int, voltage: float, address: int = GP8403_DEFAULT_ADDRESS) -> None:
     _validate_channel(channel)
-    dac_code = voltage_to_code(voltage)
-    _write_channel_register(channel, dac_code)
+    _write_channel_register(channel, voltage_to_code(voltage), address)
 
-
-def set_pressure(channel: int, pressure_psi: float) -> None:
-    """Set the output pressure (in PSI) for a DAC channel."""
-
-    voltage = pressure_to_voltage(pressure_psi)
-    set_voltage(channel, voltage)
+def set_pressure(channel: int, pressure_psi: float, address: int = GP8403_DEFAULT_ADDRESS) -> None:
+    set_voltage(channel, pressure_to_voltage(pressure_psi), address)
 
 
 def cleanup() -> None:
-    """Close the I2C bus if it was opened."""
-
     global _bus
-
-    if _bus is not None and hasattr(_bus, "close"):
+    if _bus is not None:
         try:
             _bus.close()
         finally:
             _bus = None
-
 
 __all__ = [
     "pressure_to_voltage",
     "voltage_to_code",
     "set_voltage",
     "set_pressure",
+    "gp8403_set_range_0_10v",
     "cleanup",
 ]
