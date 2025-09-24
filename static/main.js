@@ -13,12 +13,27 @@ async function getJSON(url) {
   return res.json();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    const resp = await getJSON("/api/state");
+    if (resp.ok) {
+      const s = resp.state;
+      ["piston1", "piston2"].forEach(p => {
+        document.getElementById(`${p}-desired-pressure`).value = s[p].desired_pressure ?? 0;
+        document.getElementById(`${p}-max-cycles`).value = s[p].max_cycles ?? 0;
+        document.getElementById(`${p}-time-on`).value = s[p].time_on ?? 0;
+        document.getElementById(`${p}-time-off`).value = s[p].time_off ?? 0;
+      });
+    }
+  } catch {
+  }
+
   function getPanelValues(panelPrefix) {
     return {
       time_on: parseFloat(document.getElementById(`${panelPrefix}-time-on`).value || "0") || 0,
       time_off: parseFloat(document.getElementById(`${panelPrefix}-time-off`).value || "0") || 0,
       cycles: parseInt(document.getElementById(`${panelPrefix}-max-cycles`).value || "0", 10) || 0,
+      desired_pressure: parseFloat(document.getElementById(`${panelPrefix}-desired-pressure`).value || "0") || 0,
     };
   }
 
@@ -35,7 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function startOrResume(pistonName) {
     const st = await fetchStatus(pistonName);
     if (st.paused) {
-      return postJSON("/api/piston/resume", { piston: pistonName });
+      return postJSON("/api/piston/resume", {piston: pistonName});
     }
     const vals = getPanelValues(pistonName); // piston1 / piston2 prefix matches input ids
     return postJSON("/api/piston/start", {
@@ -43,6 +58,7 @@ document.addEventListener("DOMContentLoaded", () => {
       time_on: vals.time_on,
       time_off: vals.time_off,
       cycles: vals.cycles,
+      desired_pressure: vals.desired_pressure,
     });
   }
 
@@ -53,6 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const startBtn = panel.querySelector(".start-btn");
     const pauseBtn = panel.querySelector(".pause-btn");
     const resetBtn = panel.querySelector(".reset-btn");
+    const refreshBtn = panel.querySelector(".refresh-btn");
     const statusEl = statusElFor(pistonName);
 
     startBtn.addEventListener("click", async () => {
@@ -65,14 +82,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     pauseBtn.addEventListener("click", async () => {
-      const resp = await postJSON("/api/piston/pause", { piston: pistonName });
+      const resp = await postJSON("/api/piston/pause", {piston: pistonName});
       if (!resp.ok) alert(resp.error || "Pause failed");
     });
 
     resetBtn.addEventListener("click", async () => {
-      const resp = await postJSON("/api/piston/reset", { piston: pistonName });
+      const resp = await postJSON("/api/piston/reset", {piston: pistonName});
       if (!resp.ok) alert(resp.error || "Reset failed");
     });
+
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", async () => {
+        const vals = getPanelValues(pistonName);  // { time_on, time_off, cycles }
+        const resp = await postJSON("/api/piston/update", {
+          piston: pistonName,
+          time_on: vals.time_on,
+          time_off: vals.time_off,
+          cycles: vals.cycles,
+          desired_pressure: vals.desired_pressure,
+        // desired_pressure: desired
+      });
+      if (!resp.ok) alert(resp.error || "Update failed");
+    });
+  }
 
     // status poller
     setInterval(async () => {
@@ -80,7 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const s = await fetchStatus(pistonName);
         const state = s.running ? (s.paused ? "Paused" : "Running") : "Idle";
         const progress =
-          s.total_cycles > 0 ? ` (${s.current_cycle}/${s.total_cycles})` : "";
+            s.total_cycles > 0 ? ` (${s.current_cycle}/${s.total_cycles})` : "";
         statusEl.textContent = `${state}${progress}`;
       } catch (e) {
         statusEl.textContent = "Status unavailable";
