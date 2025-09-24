@@ -238,8 +238,8 @@ def piston_update():
             desired_pressure_value = float(desired_pressure)
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Desired pressure must be a number"}), 400
-        if not 0.0 <= desired_pressure_value <= 100.0:
-            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 100 psi"}), 400
+        if not 0.0 <= desired_pressure_value <= 130.0:
+            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 130 psi"}), 400
         try:
             voltage = _apply_desired_pressure(piston, desired_pressure_value)
         except Exception as exc:
@@ -285,8 +285,8 @@ def piston_start():
             desired_pressure_value = float(desired_pressure)
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Desired pressure must be a number"}), 400
-        if not 0.0 <= desired_pressure_value <= 100.0:
-            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 100 psi"}), 400
+        if not 0.0 <= desired_pressure_value <= 130.0:
+            return jsonify({"ok": False, "error": "Desired pressure must be between 0 and 130 psi"}), 400
         try:
             voltage = _apply_desired_pressure(piston, desired_pressure_value)
         except Exception as exc:
